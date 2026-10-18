@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>フルーツタッチ</title>
+<style>
+:root{--bg:#f5f5f7;--fg:#1d1d1f;--card:#fff;--accent:#e8590c;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1c1e;--fg:#f2f2f7;--card:#2c2c2e;--accent:#ff922b}}
+:root[data-theme="dark"]{--bg:#1c1c1e;--fg:#f2f2f7;--card:#2c2c2e;--accent:#ff922b}
+html{color-scheme:light dark}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,"Hiragino Sans","Noto Sans JP",sans-serif;display:flex;flex-direction:column;align-items:center;padding:12px}
+h1{font-size:20px;margin:4px 0}
+.wrap{position:relative;width:100%;max-width:640px}
+canvas{width:100%;height:auto;border-radius:12px;background:#000;display:block}
+.hud{display:flex;justify-content:space-between;width:100%;max-width:640px;font-size:18px;font-weight:600;margin:6px 0}
+#overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(0,0,0,.55);border-radius:12px;color:#fff;text-align:center;padding:16px}
+button{background:var(--accent);color:#fff;border:0;border-radius:999px;padding:12px 28px;font-size:18px;font-weight:600;cursor:pointer}
+p.note{font-size:13px;opacity:.75;max-width:640px;margin:8px 0}
+</style>
+</head>
+<body>
+<h1>🍎 フルーツタッチ</h1>
+<div class="hud"><span>スコア: <span id="score">0</span></span><span>残り: <span id="time">45</span>秒</span></div>
+<div class="wrap">
+<canvas id="c" width="640" height="480"></canvas>
+<div id="overlay">
+<div id="msg" style="font-size:16px;line-height:1.6">カメラに向かって、体全体が映る位置に立ってください。<br>降ってくるフルーツに手や体で触れて消そう!<br>💣 に触れると減点です。</div>
+<button id="start">カメラを許可してスタート</button>
+</div>
+</div>
+<p class="note">映像は端末内でのみ処理され、外部には送信されません。明るい場所で、背景が動かない状態だと遊びやすくなります。</p>
+<video id="v" playsinline muted style="display:none"></video>
+<script>
+(function(){
+var cv=document.getElementById('c'),ctx=cv.getContext('2d');
+var W=640,H=480,SW=64,SH=48,K=W/SW;
+var sm=document.createElement('canvas');sm.width=SW;sm.height=SH;
+var sctx=sm.getContext('2d',{willReadFrequently:true});
+var video=document.getElementById('v');
+var overlay=document.getElementById('overlay'),msg=document.getElementById('msg'),btn=document.getElementById('start');
+var scoreEl=document.getElementById('score'),timeEl=document.getElementById('time');
+var prev=null,motion=new Uint8Array(SW*SH);
+var fruits=[],pops=[],score=0,playing=false,endAt=0,lastSpawn=0;
+var FRUITS=['🍎','🍊','🍌','🍇','🍓','🍉'];
+
+function startCamera(){
+  return navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'user'},audio:false}).then(function(s){
+    video.srcObject=s;return video.play();
+  });
+}
+function spawn(now){
+  var bomb=Math.random()<0.15;
+  fruits.push({x:50+Math.random()*(W-100),y:-40,vy:2+Math.random()*2+score/80,e:bomb?'💣':FRUITS[Math.floor(Math.random()*FRUITS.length)],bomb:bomb});
+  lastSpawn=now;
+}
+function detect(){
+  sctx.save();sctx.translate(SW,0);sctx.scale(-1,1);
+  sctx.drawImage(video,0,0,SW,SH);sctx.restore();
+  var d=sctx.getImageData(0,0,SW,SH).data,cur=new Uint8Array(SW*SH);
+  for(var i=0;i<SW*SH;i++){cur[i]=(d[i*4]*0.3+d[i*4+1]*0.59+d[i*4+2]*0.11)|0;}
+  if(prev){for(var j=0;j<SW*SH;j++){motion[j]=Math.abs(cur[j]-prev[j])>28?1:0;}}
+  prev=cur;
+}
+function motionIn(f){
+  var cx=(f.x/K)|0,cy=(f.y/K)|0,r=3,n=0;
+  for(var y=cy-r;y<=cy+r;y++){if(y<0||y>=SH)continue;
+    for(var x=cx-r;x<=cx+r;x++){if(x<0||x>=SW)continue;n+=motion[y*SW+x];}}
+  return n;
+}
+function frame(now){
+  requestAnimationFrame(frame);
+  if(video.readyState<2)return;
+  ctx.save();ctx.translate(W,0);ctx.scale(-1,1);ctx.drawImage(video,0,0,W,H);ctx.restore();
+  detect();
+  ctx.fillStyle='rgba(80,255,120,.35)';
+  for(var y=0;y<SH;y++)for(var x=0;x<SW;x++){if(motion[y*SW+x])ctx.fillRect(x*K,y*K,K,K);}
+  if(playing){
+    if(now-lastSpawn>Math.max(450,900-score*6))spawn(now);
+    ctx.font='56px serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    for(var i=fruits.length-1;i>=0;i--){
+      var f=fruits[i];f.y+=f.vy;
+      if(f.y>H+40){fruits.splice(i,1);continue;}
+      if(motionIn(f)>=12){
+        score+=f.bomb?-3:1;if(score<0)score=0;
+        pops.push({x:f.x,y:f.y,t:20,txt:f.bomb?'-3':'+1',bad:f.bomb});
+        fruits.splice(i,1);scoreEl.textContent=score;continue;
+      }
+      ctx.fillText(f.e,f.x,f.y);
+    }
+    for(var k=pops.length-1;k>=0;k--){
+      var p=pops[k];p.t--;p.y-=1.5;
+      ctx.font='bold 28px sans-serif';ctx.fillStyle=p.bad?'#ff6b6b':'#ffe066';ctx.fillText(p.txt,p.x,p.y);
+      if(p.t<=0)pops.splice(k,1);
+    }
+    var left=Math.max(0,Math.ceil((endAt-now)/1000));timeEl.textContent=left;
+    if(now>=endAt)finish();
+  }
+}
+function finish(){
+  playing=false;fruits=[];pops=[];
+  msg.innerHTML='終了!スコア: <b style="font-size:28px">'+score+'</b>';
+  btn.textContent='もう一度';overlay.style.display='flex';
+}
+function begin(){
+  score=0;scoreEl.textContent=0;fruits=[];pops=[];prev=null;
+  overlay.style.display='none';playing=true;
+  endAt=performance.now()+45000;lastSpawn=performance.now();
+}
+btn.addEventListener('click',function(){
+  if(video.srcObject){begin();return;}
+  btn.disabled=true;btn.textContent='カメラを起動中…';
+  startCamera().then(function(){btn.disabled=false;begin();}).catch(function(e){
+    btn.disabled=false;btn.textContent='もう一度試す';
+    msg.textContent='カメラを起動できませんでした。ブラウザのカメラ許可を確認してください。('+(e&&e.name?e.name:'error')+')';
+  });
+});
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
